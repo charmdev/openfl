@@ -7,7 +7,7 @@ import openfl.events.Event;
 class SystemEvent extends Event {
 	
 	
-	public static var SYSTEM:String = "system";
+	public static inline var SYSTEM:String = "system";
 	
 	public var data (default, null):Int;
 	

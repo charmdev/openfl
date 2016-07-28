@@ -4,7 +4,7 @@ package openfl._legacy.events; #if openfl_legacy
 class HTTPStatusEvent extends Event {
 	
 	
-	public static var HTTP_STATUS = "httpStatus";
+	public static inline var HTTP_STATUS = "httpStatus";
 	
 	public var status:Int;
 	public var responseHeaders : Array<flash.net.URLRequestHeader>;
