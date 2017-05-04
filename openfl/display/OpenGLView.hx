@@ -26,8 +26,8 @@ class OpenGLView extends DirectRenderer {
 	
 	public static var isSupported (get, null):Bool;
 	
-	private var __added:Bool;
-	private var __initialized:Bool;
+	private var __added:Bool = false;
+	private var __initialized:Bool = false;
 	
 	
 	public function new () {
@@ -180,22 +180,26 @@ class OpenGLView extends DirectRenderer {
 		
 		if (stage != null && __renderable) {
 			
+			renderSession.spriteBatch.finish();
+			
 			var rect = null;
 			
 			if (scrollRect == null) {
 				
-				rect = new Rectangle (0, 0, stage.stageWidth, stage.stageHeight);
+				rect = new Rectangle(0, 0, stage.stageWidth, stage.stageHeight);
 				
 			} else {
 				
-				rect = new Rectangle (x + scrollRect.x, y + scrollRect.y, scrollRect.width, scrollRect.height);
+				rect = new Rectangle(x + scrollRect.x, y + scrollRect.y, scrollRect.width, scrollRect.height);
 				
 			}
 			
-			if (__render != null) __render (rect);
+			if (__render != null) __render(rect);
 			
 			renderSession.shaderManager.setShader(null);
 			renderSession.blendModeManager.setBlendMode(null);
+			
+			renderSession.spriteBatch.begin(renderSession);
 		}
 		
 	}
