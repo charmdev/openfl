@@ -229,8 +229,8 @@ import openfl.Lib;
 		else {
 			event.__setPhase (EventPhase.CAPTURING_PHASE);
 			event.target = this;
-			stack[i].__dispatchEvent (event);
-			if (event.__getIsCancelled ()) {					
+			__dispatchEvent (event);
+			if (event.__getIsCancelled ()) {
 				return;
 			}
 		}
