@@ -207,66 +207,49 @@ import openfl.Lib;
 	
 	
 	@:noCompletion private function __fireEvent (event:Event):Void {
-		
 		var stack:Array<InteractiveObject> = [];
-		
 		if (__parent != null) {
-			
 			__parent.__getInteractiveObjectStack (stack);
-			
 		}
 		
 		var length = stack.length;
-		
 		if (stack.length > 0) {
-			
 			event.__setPhase (EventPhase.CAPTURING_PHASE);
 			event.target = this;
 			var i = length - 1;
 			
 			while (i >= 0) {
-				
 				stack[i].__dispatchEvent (event);
-				
 				if (event.__getIsCancelled ()) {
-					
 					return;
-					
 				}
-				
 				i--;
-				
 			}
-			
+		}
+		else {
+			event.__setPhase (EventPhase.CAPTURING_PHASE);
+			event.target = this;
+			stack[i].__dispatchEvent (event);
+			if (event.__getIsCancelled ()) {					
+				return;
+			}
 		}
 			
 		event.__setPhase (EventPhase.AT_TARGET);
 		__dispatchEvent (event);
-		
 		if (event.__getIsCancelled ()) {
-			
 			return;
-			
 		}
 		
 		if (event.bubbles) {
-			
 			event.__setPhase (EventPhase.BUBBLING_PHASE);
-			
 			for (i in 0...length) {
-				
 				stack[i].__dispatchEvent (event);
-				
 				if (event.__getIsCancelled ()) {
-					
 					return;
-					
 				}
-				
 			}
-			
 		}
-		
 	}
 	
 	
