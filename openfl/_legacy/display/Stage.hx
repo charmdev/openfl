@@ -383,8 +383,9 @@ class Stage extends DisplayObjectContainer {
 		var result = 0.0;
 		var type = Std.int (Reflect.field (event, "type"));
 		
+#if !debug		
 		try {
-			
+#end			
 			switch (type) {
 				
 				case 2: // etChar
@@ -549,12 +550,13 @@ class Stage extends DisplayObjectContainer {
 				// TODO: user, sys_wm, sound_finished
 				
 			}
-			
+#if !debug
 		} catch (error:Dynamic) {
 			
 			Lib.rethrow (error);
 			
 		}
+#end		
 		
 		#if hxtelemetry
 		Telemetry.__endTiming (TelemetryCommandName.EVENT);

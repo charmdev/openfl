@@ -103,30 +103,19 @@ class Lib {
 		
 		create_main_frame (function (frameHandle:Dynamic) {
 			
-			try {
-				
-				__mainFrame = frameHandle;
-				var stage_handle = lime_get_frame_stage (__mainFrame);
-				
-				Lib.__stage = (stageClass == null ? new Stage (stage_handle, width, height) : Type.createInstance (stageClass, [ stage_handle, width, height]));
-				Lib.__stage.frameRate = frameRate;
-				Lib.__stage.opaqueBackground = color;
-				Lib.__stage.onQuit = close;
-				
-				if (__current != null) {
-					
-					Lib.__stage.addChild (__current);
-					
-				}
-				
-				onLoaded ();
-				
-			} catch (error:Dynamic) { 
-				
-				rethrow (error);
-				
+			__mainFrame = frameHandle;
+			var stage_handle = lime_get_frame_stage (__mainFrame);
+			
+			Lib.__stage = (stageClass == null ? new Stage (stage_handle, width, height) : Type.createInstance (stageClass, [ stage_handle, width, height]));
+			Lib.__stage.frameRate = frameRate;
+			Lib.__stage.opaqueBackground = color;
+			Lib.__stage.onQuit = close;
+			
+			if (__current != null) {
+				Lib.__stage.addChild (__current);
 			}
 			
+			onLoaded ();
 		}, width, height, flags, title, icon == null ? null : icon.__handle);
 		
 	}
