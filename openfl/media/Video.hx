@@ -280,7 +280,7 @@ class Video extends DisplayObject {
 import openfl.display.DisplayObject;
 
 
-class Video extends DisplayObject implements Dynamic {
+class Video extends DisplayObject {
 	
 	
 	public function new (width:Int = 320, height:Int = 240):Void {
