@@ -429,9 +429,9 @@ class GL {
 	public static inline var UNPACK_COLORSPACE_CONVERSION_WEBGL = 0x9243;
 	public static inline var BROWSER_DEFAULT_WEBGL			 = 0x9244;
 
-	public static var drawingBufferHeight(get_drawingBufferHeight, null):Int;
-	public static var drawingBufferWidth(get_drawingBufferWidth, null):Int;
-	public static var version(get_version, null):Int;
+	public static var drawingBufferHeight(get, null):Int;
+	public static var drawingBufferWidth(get, null):Int;
+	public static var version(get, null):Int;
 	
 	private static var defaultFramebuffer:GLFramebuffer;
 	

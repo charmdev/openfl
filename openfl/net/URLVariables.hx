@@ -1,7 +1,7 @@
 package openfl.net;
 
 
-class URLVariables implements Dynamic {
+class URLVariables {
 	
 	
 	public function new (source:String = null) {
