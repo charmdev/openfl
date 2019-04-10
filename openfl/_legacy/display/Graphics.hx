@@ -7,6 +7,8 @@ import openfl.display.InterpolationMethod;
 import openfl.geom.Matrix;
 import openfl.Lib;
 import openfl.display.Tilesheet;
+import kha.FastFloat;
+import kha.ShortInt;
 
 
 class Graphics {
@@ -180,8 +182,8 @@ class Graphics {
 		lime_gfx_draw_tiles (__handle, sheet.__handle, data, flags, count);
 	}
 	
-	
-	public function drawTriangles (vertices:Array<Float>, indices:Array<Int> = null, uvtData:Array<Float> = null, culling:TriangleCulling = null, colors:Array<Int> = null, blendMode:Int = 0):Void {
+
+	public function drawTriangles (vertices:Array<FastFloat>, indices:Array<ShortInt> = null, uvtData:Array<FastFloat> = null, culling:TriangleCulling = null, colors:Array<Int> = null, blendMode:Int = 0):Void {
 		
 		var cull:Int = (culling == null ? 0 : Type.enumIndex (culling) - 1);
 		lime_gfx_draw_triangles (__handle, vertices, indices, uvtData, cull, colors, blendMode);
