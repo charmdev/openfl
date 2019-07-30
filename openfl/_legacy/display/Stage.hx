@@ -155,7 +155,7 @@ class Stage extends DisplayObjectContainer {
 		stage3Ds.push (new Stage3D ());
 		
 		#if(cpp && (safeMode || debug))
- 		untyped __global__.__hxcpp_set_critical_error_handler( function(message:String) { throw message; } );
+ 		untyped __global__.__hxcpp_set_critical_error_handler( function(message:String) {throw message; } );
  		#end
 	}
 	
@@ -371,7 +371,7 @@ class Stage extends DisplayObjectContainer {
 	#else
 	@:noCompletion @:keep private function dummyTrace ():Void { trace (""); }
 	@:functionCode("try {")
-	@:functionTailCode(' } catch(Dynamic e) { __hx_dump_stack(); ::haxe::Log_obj::trace(HX_CSTRING("Uncaught exception: ") + e,hx::SourceInfo(HX_CSTRING("Stage.hx"),0,HX_CSTRING("flash.display.Stage"),HX_CSTRING("__doProcessStageEvent"))); } return 0;')
+	@:functionTailCode(' } catch(Dynamic e) { __hx_dump_stack(); ::haxe::Log_obj::trace(HX_CSTRING("Uncaught exception: ") + e,hx::SourceInfo(HX_CSTRING("Stage.hx"),0,HX_CSTRING("flash.display.Stage"),HX_CSTRING("__doProcessStageEvent"))); __hxcpp_exit(1);} return 0;')
 	#end
 	#end
 	@:noCompletion private function __doProcessStageEvent (event:Dynamic):Float {
