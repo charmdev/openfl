@@ -1,1167 +1,1532 @@
-package nme.display;
-#if !flash
+package openfl._legacy.display; #if openfl_legacy
 
-import nme.events.AppLinkEvent;
-import haxe.Timer;
-import nme.app.Application;
-import nme.app.Window;
-import nme.app.EventId;
-import nme.app.AppEvent;
-import nme.app.FrameTimer;
-import nme.display.DisplayObjectContainer;
-import nme.ui.Keyboard;
-import nme.events.TextEvent;
-import nme.text.TextField;
 
-#if stage3d
-import nme.display.Stage3D;
-#end
-import nme.media.StageVideo;
-
-import nme.ui.GameInput;
-import nme.ui.GamepadButton;
-import nme.events.GameInputEvent;
-import nme.events.JoystickEvent;
-import nme.events.MouseEvent;
-import nme.events.FocusEvent;
-import nme.events.KeyboardEvent;
-import nme.events.SystemEvent;
-import nme.events.TouchEvent;
-import nme.events.Event;
-import nme.geom.Point;
-import nme.geom.Rectangle;
-import nme.Lib;
-import nme.media.SoundChannel;
-import nme.net.URLLoader;
-import nme.PrimeLoader;
-import nme.Vector;
-import nme.events.StageVideoAvailabilityEvent;
+import haxe.io.Bytes;
 import haxe.CallStack;
+import haxe.Timer;
+import openfl.display.DisplayObjectContainer;
+import openfl.display.OpenGLView;
+import openfl.display.Stage3D;
+import openfl.display.StageAlign;
+import openfl.display.StageDisplayState;
+import openfl.display.StageScaleMode;
+import openfl.events.FocusEvent;
+import openfl.events.JoystickEvent;
+import openfl.events.KeyboardEvent;
+import openfl.events.MouseEvent;
+import openfl.events.SystemEvent;
+import openfl.events.TouchEvent;
+import openfl.events.Event;
+import openfl.events.UncaughtErrorEvent;
+import openfl.geom.Point;
+import openfl.geom.Rectangle;
+import openfl.media.SoundChannel;
+import openfl.net.URLLoader;
+import openfl._legacy.gl.GL;
+import openfl._legacy.gl.GLFramebuffer;
+import openfl._legacy.system.ScreenMode;
+import openfl.ui.Keyboard;
+import openfl.Lib;
+import openfl.Vector;
 
-#if cpp
-import cpp.vm.Gc;
-#if haxe4
-import sys.thread.Thread;
-import sys.thread.Lock;
-#else
-import cpp.vm.Thread;
-import cpp.vm.Lock;
+#if hxtelemetry
+import openfl.profiler.Telemetry;
 #end
+
+#if android
+import openfl._legacy.utils.JNI;
 #end
 
-@:nativeProperty
-class Stage extends DisplayObjectContainer implements nme.app.IPollClient implements nme.app.IAppEventHandler
-{
-   /**
-    * Time, in seconds, we wake up before the frame is due.  We then do a
-    * "busy wait" to ensure the frame comes at the right time.  By increasing this number,
-    * the frame rate will be more constant, but the busy wait will take more CPU.
-    * @private
-    */
-   public static var nmeEarlyWakeup = 0.005;
+@:access(openfl._legacy.gl.GL)
 
-   public static inline var OrientationPortrait = 1;
-   public static inline var OrientationPortraitUpsideDown = 2;
-   public static inline var OrientationLandscapeRight = 3;
-   public static inline var OrientationLandscapeLeft = 4;
-   public static inline var OrientationFaceUp = 5;
-   public static inline var OrientationFaceDown = 6;
+#if hxtelemetry
+@:access(openfl.profiler.Telemetry)
+#end
 
-   // For setting 'fixed' orientation...
-   public static inline var OrientationPortraitAny = 7;
-   public static inline var OrientationLandscapeAny = 8;
-   public static inline var OrientationAny = 9;
 
-   public static inline var OrientationUseFunction = -1;
+class Stage extends DisplayObjectContainer {
 	
-   static var currentOrientation:Int = 3;
-
-   public var window(default,null):Window;
-
-   public var active(get, never):Bool;
-   public var align(get, set):StageAlign;
-   public var displayState(get, set):StageDisplayState;
-   public var dpiScale(get, never):Float;
-   public var focus(get, set):InteractiveObject;
-   public var frameRate(get, set): Float;
-   public var onQuit(get,set):Void -> Void; 
-   public var isOpenGL(get, never):Bool;
-   // Is this used?  Could not tell where "event.down" is being set, therefore this would appear useless
-   //public var onKey:Int -> Bool -> Int -> Int -> Void; 
-
-   // Set for custom exception processing
-   public var exceptionHandler:Dynamic->Array<StackItem>->Void;
-
-   public var pauseWhenDeactivated:Bool;
-   public var quality(get, set):StageQuality;
-   public var scaleMode(get, set):StageScaleMode;
-   public var stageFocusRect(get, set):Bool;
-   public var stageHeight(get, never):Int;
-   public var stageWidth(get, never):Int;
-   public var renderRequest(get,set):Void->Bool;
-   public var color(get,set):Int;
-
-   var invalid:Bool;
-
-   #if stage3d
-   public var stage3Ds:Vector<Stage3D>;
-   #end
-   public var stageVideos:Vector<StageVideo>;
-
-   private static var efLeftDown = 0x0001;
-   private static var efShiftDown = 0x0002;
-   private static var efCtrlDown = 0x0004;
-   private static var efAltDown = 0x0008;
-   private static var efCommandDown = 0x0010;
-   private static var efLocationRight = 0x4000;
-   private static var efNoNativeClick = 0x10000;
-   private static var nmeMouseChanges:Array<String> = [ MouseEvent.MOUSE_OUT, MouseEvent.MOUSE_OVER, MouseEvent.ROLL_OUT, MouseEvent.ROLL_OVER ];
-   private static var nmeTouchChanges:Array<String> = [ TouchEvent.TOUCH_OUT, TouchEvent.TOUCH_OVER,   TouchEvent.TOUCH_ROLL_OUT, TouchEvent.TOUCH_ROLL_OVER ];
-   private static var sClickEvents = [ "click", "middleClick", "rightClick" ];
-   private static var sDownEvents = [ "mouseDown", "middleMouseDown", "rightMouseDown" ];
-   private static var sUpEvents = [ "mouseUp", "middleMouseUp", "rightMouseUp" ];
-
-   public static var nmeQuitting = false;
-
-   private var nmeJoyAxisData:Array<Array<Float>>;
-   private var nmeDragBounds:Rectangle;
-   private var nmeDragObject:Sprite;
-   private var nmeDragOffsetX:Float;
-   private var nmeDragOffsetY:Float;
-   private var nmeFocusOverObjects:Array<InteractiveObject>;
-   private var nmeFramePeriod:Float;
-   private var nmeLastClickTime:Float;
-   private var nmeLastDown:Array<InteractiveObject>;
-   private var nmeLastRender:Float;
-   private var nmeMouseOverObjects:Array<InteractiveObject>;
-   private var nmeTouchInfo:Map<Int,TouchInfo>;
-   private var nmeFrameTimer:FrameTimer;
-   private var nmeEnterFrameEvent:Event;
-   private var nmeRenderEvent:Event;
-   var nmePrenderListeners:Array<Void->Void>;
-
-   #if cpp
-   var nmePreemptiveGcFreq:Int;
-   var nmePreemptiveGcSince:Int;
-   var nmeCollectionLock:Lock;
-   var nmeCollectionAgency:Thread;
-   var nmeFrameAlloc:Array<Int>;
-   var nmeLastCurrentMemory:Int;
-   var nmeLastPreempt:Bool;
-   var nmeFrameMemIndex:Int;
-   #end
-
-   public function new(inWindow:Window)
-   {
-      #if HXCPP_TELEMETRY
-      Application.initHxTelemetry();
-      #end
-
-      nmeEnterFrameEvent = new Event(Event.ENTER_FRAME);
-      nmeRenderEvent = new Event(Event.RENDER);
-
-      window = inWindow;
-      invalid = false;
-      super(window.nmeHandle, "Stage");
-
-      nmeMouseOverObjects = [];
-      nmeFocusOverObjects = [];
-      pauseWhenDeactivated = true;
-
-      if (window.appEventHandler==null)
-      {
-         window.appEventHandler = this;
-         Application.addPollClient(this);
-         nmeFrameTimer = new FrameTimer(window, Application.initFrameRate);
-      }
-
-      nmeLastRender = 0;
-      nmeLastDown = [];
-      nmeLastClickTime = 0.0;
-      nmeTouchInfo = new Map<Int,TouchInfo>();
-      nmeJoyAxisData = new Array<Array<Float>>();
-
-      #if stage3d
-      stage3Ds = new Vector();
-      stage3Ds.push(new Stage3D());
-      #end
-      stageVideos = new Vector<StageVideo>(1);
-      stageVideos[0] = new StageVideo(this);
-
-      #if cpp
-      nmePreemptiveGcFreq = 0;
-      nmePreemptiveGcSince = 0;
-      nmeLastCurrentMemory = 0;
-      nmeLastPreempt = false;
-      nmeFrameMemIndex = 0;
-      #end
-	  
-	  addEventListener(KeyboardEvent.KEY_DOWN, onKeyDown);
-   }
-   
-   public function getNotchHeight():Int
-   {
-	   var notchHeight:Int = nme_get_notch_height_stage(nmeHandle);
-	   return /*90; //*/ notchHeight;
-   }
-   
-   
-   
-   private function onKeyDown(e:KeyboardEvent):Void
-   {
-	   if (e.keyCode == Keyboard.SPACE)
-	   {
-		   if (currentOrientation == OrientationLandscapeRight)
-		   {
-			   currentOrientation = OrientationLandscapeLeft;
-		   }
-		   else
-		   {
-			   currentOrientation = OrientationLandscapeRight;
-		   }
-		   
-		   trace("currentOrientation: " + currentOrientation);
-	   }
-   }
-
-   public static dynamic function getOrientation():Int 
-   {
-      return /*currentOrientation; //*/ nme_stage_get_orientation();
-   }
-
-   public static dynamic function getNormalOrientation():Int 
-   {
-      return nme_stage_get_normal_orientation();
-   }
-
-   public function invalidate():Void 
-   {
-      invalid=true;
-      if (nmeFrameTimer!=null)
-         nmeFrameTimer.invalidate();
-   }
-
-   public function isDisplayListDirty() : Bool
-   {
-      var result:Bool =  nme_stage_check_cache(nmeHandle);
-      return result;
-   }
-
-   function get_onQuit() return Application.onQuit;
-   function set_onQuit(val) { Application.onQuit=val; return val; }
-
-   override public function addEventListener(type:String, listener:Dynamic->Void, useCapture:Bool = false, priority:Int = 0, useWeakReference:Bool = false):Void 
-   {
-       super.addEventListener(type, listener, useCapture, priority, useWeakReference);
-       if (type==StageVideoAvailabilityEvent.STAGE_VIDEO_AVAILABILITY)
-          dispatchEvent( new StageVideoAvailabilityEvent(StageVideoAvailabilityEvent.STAGE_VIDEO_AVAILABILITY,false,false,"available") );
-   }
-
-   private function nmeCheckFocusInOuts(inEvent:AppEvent, inStack:Array<InteractiveObject>)
-   {
-      // Exit ...
-      var new_n = inStack.length;
-      var new_obj:InteractiveObject = new_n > 0 ? inStack[new_n - 1] : null;
-      var old_n = nmeFocusOverObjects.length;
-      var old_obj:InteractiveObject = old_n > 0 ? nmeFocusOverObjects[old_n - 1] : null;
-      
-      if (new_obj != old_obj)
-      {
-         if (old_obj != null)
-         {
-            var focusOut = new FocusEvent(FocusEvent.FOCUS_OUT, true, false, new_obj, inEvent.flags > 0, inEvent.code);
-            focusOut.target = old_obj;
-            old_obj.nmeFireEvent(focusOut);
-         }
-         
-         if (new_obj!=null)
-         {
-            var focusIn = new FocusEvent(FocusEvent.FOCUS_IN, true, false, old_obj, inEvent.flags > 0, inEvent.code);
-         
-            focusIn.target = new_obj;
-            new_obj.nmeFireEvent(focusIn);
-         }
-         
-         nmeFocusOverObjects = inStack;
-      }
-   }
-
-   private function nmeCheckInOuts(inEvent:MouseEvent, inStack:Array<InteractiveObject>, ?touchInfo:TouchInfo)
-   {
-      var prev = touchInfo == null ? nmeMouseOverObjects : touchInfo.touchOverObjects;
-      var events = touchInfo == null ? nmeMouseChanges : nmeTouchChanges;
-
-      var new_n = inStack.length;
-      var new_obj:InteractiveObject = new_n > 0 ? inStack[new_n - 1] : null;
-      var old_n = prev.length;
-      var old_obj:InteractiveObject = old_n > 0 ? prev[old_n - 1] : null;
-
-      if (new_obj != old_obj) 
-      {
-         // mouseOut/MouseOver goes up the object tree...
-         if (old_obj != null)
-            old_obj.nmeFireEvent(inEvent.nmeCreateSimilar(events[0], new_obj, old_obj));
-
-         if (new_obj != null)
-            new_obj.nmeFireEvent(inEvent.nmeCreateSimilar(events[1], old_obj));
-
-         // rollOver/rollOut goes only over the non-common objects in the tree...
-         var common = 0;
-         while(common < new_n && common < old_n && inStack[common] == prev[common])
-            common++;
-
-         var rollOut = inEvent.nmeCreateSimilar(events[2], new_obj, old_obj);
-         var i = old_n - 1;
-         while(i >= common) 
-         {
-            prev[i].nmeDispatchEvent(rollOut);
-            i--;
-         }
-
-         var rollOver = inEvent.nmeCreateSimilar(events[3], old_obj);
-         var i = new_n - 1;
-         while(i >= common) 
-         {
-            inStack[i].nmeDispatchEvent(rollOver);
-            i--;
-         }
-
-         if (touchInfo == null)
-            nmeMouseOverObjects = inStack;
-         else
-            touchInfo.touchOverObjects = inStack;
-
-         return false;
-      }
-
-      return true;
-   }
-
-   public function addPrerenderListener(listener:Void->Void)
-   {
-      if (nmePrenderListeners==null)
-         nmePrenderListeners = [listener];
-      else
-         nmePrenderListeners.push(listener);
-   }
-
-   public function removePrerenderListener(listener:Void->Void)
-   {
-      if (nmePrenderListeners!=null && nmePrenderListeners.remove(listener) && nmePrenderListeners.length==0)
-         nmePrenderListeners = null;
-   }
-
-
-   // --- IAppEventHandler ----
-   
-   public function onText(inEvent:AppEvent, type:String):Void
-   {
-       var obj:DisplayObject = nmeFindByID(inEvent.id);
-
-       if (obj != null && Std.is(obj, TextField))
-       {
-           var text:String = null;
-           if (inEvent.code>0)
-           {
-              #if haxe4
-              text = String.fromCharCode(inEvent.code);
-              #else
-              var u = new haxe.Utf8();
-              u.addChar( inEvent.code );
-              text = u.toString();
-              #end
-           }
-           else
-           {
-              text = inEvent.text;
-           }
-           var evt = new TextEvent(type, true, true, text);
-           evt.target = obj;
-           obj.nmeFireEvent(evt);
-
-           if (evt.nmeGetIsCancelled())
-               inEvent.result = 1;
-       }
-   }
-
-   public function onKey(inEvent:AppEvent, type:String):Void
-   {
-      var stack = new Array<InteractiveObject>();
-      var obj:DisplayObject = nmeFindByID(inEvent.id);
-
-      if (obj != null)
-         obj.nmeGetInteractiveObjectStack(stack);
-
-      if (stack.length > 0) 
-      {
-         var value = inEvent.value;
-
-         // This messes with function keys on SDL - why is this here?
-         //if (value >= 96 && value <= 122) value -= 32;
-
-         var obj = stack[0];
-         var flags:Int = inEvent.flags;
-         var evt = new KeyboardEvent(type, true, true, inEvent.code, value,
-                    ((flags & efLocationRight) == 0) ? 1 : 0,
-                    (flags & efCtrlDown) != 0,
-                    (flags & efAltDown) != 0,
-                    (flags & efShiftDown) !=0,
-                    (flags & efCtrlDown) != 0,
-                    (flags & efCommandDown) != 0);
-         obj.nmeFireEvent(evt);
-
-         if (evt.nmeGetIsCancelled())
-            inEvent.result = 1;
-
-         #if (windows || linux || mac)
-         if (inEvent.result != -1 && type == KeyboardEvent.KEY_DOWN) 
-         {
-            #if mac
-            if (flags & efCtrlDown > 0 && flags & efCommandDown > 0 && flags & efShiftDown==0 && inEvent.code == Keyboard.F ) 
-            #else
-            if (flags & efAltDown > 0 && inEvent.code == Keyboard.ENTER ) 
-            #end
-            {
-               if (displayState == StageDisplayState.NORMAL) 
-                  displayState = StageDisplayState.FULL_SCREEN_INTERACTIVE;
-               else 
-                  displayState = StageDisplayState.NORMAL;
-            }
-         }
-         #end
-      }
-   }
-
-   public function onMouse(inEvent:AppEvent, inType:String, inFromMouse):Void
-   {
-      var type = inType;
-      var button:Int = inEvent.value;
-
-      if (!inFromMouse)
-         button = 0;
-
-      var wheel = 0;
-
-      if (inType == MouseEvent.MOUSE_DOWN) 
-      {
-         if (button > 2)
-            return;
-         type = sDownEvents[button];
-
-      }
-      else if (inType == MouseEvent.MOUSE_UP) 
-      {
-         if (button > 2) 
-         {
-            type = MouseEvent.MOUSE_WHEEL;
-            wheel = button == 3 ? 1 : -1;
-
-         }
-         else 
-            type = sUpEvents[button];
-      }
-
-      if (nmeDragObject != null)
-         nmeDrag(new Point(inEvent.x, inEvent.y));
-
-      var stack = new Array<InteractiveObject>();
-      var obj:DisplayObject = nmeFindByID(inEvent.id);
-
-      if (obj != null)
-         obj.nmeGetInteractiveObjectStack(stack);
-
-      var local:Point = null;
-      var evt:MouseEvent = null;
-      if (stack.length > 0) 
-      {
-         var obj = stack[0];
-         stack.reverse();
-         local = obj.globalToLocal(new Point(inEvent.x, inEvent.y));
-         evt = MouseEvent.nmeCreate(type, inEvent, local, obj);
-         evt.delta = wheel;
-         if (inFromMouse)
-            nmeCheckInOuts(evt, stack);
-         obj.nmeFireEvent(evt);
-
-      }
-      else 
-      {
-         //trace("No obj?");
-         local = new Point(inEvent.x, inEvent.y);
-         evt = MouseEvent.nmeCreate(type, inEvent, local, null);
-         evt.delta = wheel;
-         if (inFromMouse)
-            nmeCheckInOuts(evt, stack);
-      }
-
-      var click_obj = stack.length > 0 ? stack[ stack.length - 1] : this;
-      if (inType == MouseEvent.MOUSE_DOWN && button < 3) 
-      {
-         nmeLastDown[button] = evt.clickCancelled ? null : click_obj;
-      }
-      else if (inType == MouseEvent.MOUSE_UP && button < 3) 
-      {
-         if (click_obj == nmeLastDown[button]) 
-         {
-            var evt = MouseEvent.nmeCreate(sClickEvents[button], inEvent, local, click_obj);
-            click_obj.nmeFireEvent(evt);
-
-            if (button == 0 && click_obj.doubleClickEnabled) 
-            {
-               var now = inEvent.pollTime;
-               if (now - nmeLastClickTime < 0.25) 
-               {
-                  var evt = MouseEvent.nmeCreate(MouseEvent.DOUBLE_CLICK, inEvent, local, click_obj);
-                  click_obj.nmeFireEvent(evt);
-               }
-
-               nmeLastClickTime = now;
-            }
-         }
-
-         nmeLastDown[button] = null;
-      }
-   }
-
-   public function onUnhandledException(exception:Dynamic, stack:Array<StackItem>):Void
-   {
-      if (exceptionHandler!=null)
-         exceptionHandler(exception,stack);
-      else
-      {
-         trace("Exception: " + exception+"\n" + haxe.CallStack.toString(stack));
-         trace("\n\n\n===Terminating===\n.");
-         throw "Unhandled exception:" + exception;
-      }
-   }
- 
-
-   public function onTouch(inEvent:AppEvent, inType:String):Void
-   {
-      if (inType==TouchEvent.TOUCH_TAP)
-         return;
-
-      if (inType==TouchEvent.TOUCH_BEGIN)
-      {
-         var touchInfo = new TouchInfo();
-         nmeTouchInfo.set(inEvent.value, touchInfo);
-         nmeOnTouch(inEvent, TouchEvent.TOUCH_BEGIN, touchInfo);
-         return;
-      }
-
-      var touchInfo = nmeTouchInfo.get(inEvent.value);
-      nmeOnTouch(inEvent, inType, touchInfo);
-
-      if (inType==TouchEvent.TOUCH_END)
-         nmeTouchInfo.remove(inEvent.value);
-   }
-
-   public function onResize(width:Int, height:Int):Void
-   {
-      var evt = new Event(Event.RESIZE);
-      nmeDispatchEvent(evt);
-   }
-
-   public function onRender(inFrameDue:Bool)
-   {
-      #if HXCPP_TELEMETRY
-      var hxt = Application.getHxTelemetry();
-      hxt.advance_frame();
-      #end
-
-      if (inFrameDue)
-         nmeBroadcast(nmeEnterFrameEvent);
-
-      if (invalid)
-      {
-         invalid = false;
-         nmeBroadcast(nmeRenderEvent);
-      }
-
-      if (nmePrenderListeners!=null)
-         for(listener in nmePrenderListeners)
-            listener();
-
-      #if cpp
-      var rendered = false;
-      if (nmeCollectionAgency!=null && nmePreemptiveGcFreq!=0)
-      {
-         nmePreemptiveGcSince++;
-         var preempt = nmePreemptiveGcSince>=nmePreemptiveGcFreq;
-
-         #if (hxcpp_api_level >= 310)
-         // Smart preemptive
-         if (nmePreemptiveGcFreq<0)
-         {
-            if (nmeFrameAlloc==null)
-               nmeFrameAlloc = [];
-
-            var current = Gc.memInfo(Gc.MEM_INFO_CURRENT);
-            if (nmeLastCurrentMemory>0)
-            {
-               var frameAlloc = current - nmeLastCurrentMemory;
-               if (frameAlloc>=0)
-               {
-                  nmeFrameAlloc[nmeFrameMemIndex++] = frameAlloc;
-                  if (nmeFrameMemIndex>10)
-                     nmeFrameMemIndex = 0;
-               }
-               else if (!nmeLastPreempt)
-               {
-                  //trace("Missed alloc!");
-               }
-            }
-            nmeLastCurrentMemory = current;
-
-            if (nmeFrameAlloc.length>0)
-            {
-               var sum = 0;
-               for(f in nmeFrameAlloc)
-                  sum += f;
-
-               var reserved =Gc.memInfo(Gc.MEM_INFO_RESERVED);
-               preempt = sum * 1.2 /nmeFrameAlloc.length + current > reserved;
-            }
-            else
-               preempt = false;
-         }
-         #end
-
-         nmeLastPreempt = preempt;
-         if (preempt)
-         {
-            //trace("preempt");
-            nmePreemptiveGcSince = 0;
-            rendered = true;
-            nme_set_render_gc_free(true);
-            Gc.enterGCFreeZone();
-            nmeCollectionLock.release();
-            #if HXCPP_TELEMETRY
-            var stack:String = hxt.unwind_stack();
-            hxt.start_timing (".render");
-            #end
-            nme_render_stage(nmeHandle);
-            #if HXCPP_TELEMETRY
-            hxt.end_timing (".render");
-            hxt.rewind_stack (stack);
-            #end
-            Gc.exitGCFreeZone();
-            nme_set_render_gc_free(false);
-         }
-         else
-         {
-            //trace("frame");
-         }
-      }
-      if (!rendered)
-      #end
-      {
-         #if HXCPP_TELEMETRY
-         var stack:String = hxt.unwind_stack();
-         hxt.start_timing (".render");
-         #end
-         nme_render_stage(nmeHandle);
-         #if HXCPP_TELEMETRY
-         hxt.end_timing (".render");
-         hxt.rewind_stack (stack);
-         #end
-      }
-   }
-
-   public function onDisplayObjectFocus(inEvent:AppEvent):Void
-   {
-      var stack = new Array<InteractiveObject>();
-      var obj:DisplayObject = nmeFindByID(inEvent.id);
-
-      if (obj != null)
-         obj.nmeGetInteractiveObjectStack(stack);
-
-      if (stack.length > 0 && (inEvent.value == 1 || inEvent.value == 2)) 
-      {
-         var obj = stack[0];
-         var evt = new FocusEvent(
-                     inEvent.value == 1 ?  FocusEvent.MOUSE_FOCUS_CHANGE : FocusEvent.KEY_FOCUS_CHANGE,
-                     true, true, nmeFocusOverObjects.length == 0 ? null : nmeFocusOverObjects[0],
-                     inEvent.flags > 0, inEvent.code);
-         obj.nmeFireEvent(evt);
-
-         if (evt.nmeGetIsCancelled()) 
-         {
-            inEvent.result = 1;
-            return;
-         }
-      }
-      stack.reverse();
-
-      nmeCheckFocusInOuts(inEvent, stack);
-   }
-
-   public function onInputFocus(acquired:Bool):Void
-   {
-      var evt = new Event(acquired ? FocusEvent.FOCUS_IN : FocusEvent.FOCUS_OUT);
-      nmeDispatchEvent(evt);
-   }
-
-   public function onRotateRequest(inDirection:Int):Bool
-   {
-       return shouldRotateInterface(inDirection);
-   }
-
-   public function onChange(inEvent:AppEvent):Void
-   {
-      var obj:DisplayObject = nmeFindByID(inEvent.id);
-      if (obj != null)
-         obj.nmeFireEvent(new Event(Event.CHANGE));
-   }
-
-   public function onScroll(inEvent:AppEvent):Void
-   {
-      var obj:DisplayObject = nmeFindByID(inEvent.id);
-      if (obj != null)
-         obj.nmeFireEvent(new Event(Event.SCROLL));
-   }
-
-
-   public function onDpiChanged(inEvent:AppEvent):Void
-   {
-      nmeDispatchEvent(new Event(Event.DPI_CHANGED) );
-   }
-
-   public function onActive(inActive:Bool):Void
-   {
-      // trace("nmeSetActive : " + inActive);
-      if (inActive != active) 
-      {
-         window.active = inActive;
-         if (!active)
-            nmeLastRender = Timer.stamp();
-
-         var evt = new Event(inActive ? Event.ACTIVATE : Event.DEACTIVATE);
-         nmeBroadcast(evt);
-         //if (inActive)
-         //   nmePollTimers();
-      }
-   }
-
-   private inline function axismap( code:Int )
-   {
-      #if openfl_legacy
-      switch(code)
-      {
-         case 3: code = 4;
-         case 2: code = 3;
-         case 4: code = 2;
-      }
-      #end
-      return code;
-   }
-   private inline function buttonmap( code:Int )
-   {
-      #if openfl_legacy
-      switch(code)
-      {
-         case  9: code = GamepadButton.LEFT_SHOULDER;
-         case  4: code = GamepadButton.BACK;
-         case  8: code = GamepadButton.RIGHT_STICK;
-         case 10: code = GamepadButton.RIGHT_SHOULDER;
-         case  6: code = GamepadButton.START;
-         case  7: code = GamepadButton.LEFT_STICK;
-      }
-      #end
-      return code;
-   }
-
-   public function onJoystick(inEvent:AppEvent, inType:String):Void
-   {
-      var data:Array<Float> = null;
-      var user = inEvent.value;
-      var isGamePad:Bool = inEvent.y>0;
-      if(inEvent.flags > 0)
-      {
-         ///is axis move event
-         if(inEvent.flags==1)
-         {         
-            if(nmeJoyAxisData[user]==null)
-               nmeJoyAxisData[user] = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ];
-
-            data = nmeJoyAxisData[user];
-            data[ inEvent.code ] = inEvent.sx;
-            data[ inEvent.code+1 ] = inEvent.sy;
-         }
-         else if(inEvent.flags==3)
-         { 
-            //isGamePad
-            if(nmeJoyAxisData[user]==null)
-               nmeJoyAxisData[user] = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ];
-
-            data = nmeJoyAxisData[user];
-            data[ axismap(inEvent.code) ] = inEvent.sx;
-            data[ axismap(inEvent.code+1) ] = inEvent.sy;
-         }
-         else if(inEvent.flags==2)
-         {
-            if(nmeJoyAxisData[user]!=null)
-               for(d in nmeJoyAxisData[user])
-                  d = 0.0;
-         }
-      }
-      #if openfl_legacy
-      if(isGamePad && StringTools.startsWith(inType,"button"))
-      {
-         //map sdl controller to legacy xinput
-         var evt:JoystickEvent = new JoystickEvent(inType, false, false, inEvent.id, buttonmap(inEvent.code),
-                                                inEvent.value, inEvent.sx, inEvent.sy, data, isGamePad);
-         nmeDispatchEvent(evt);
-      }
-      else
-      #end
-      {
-         var evt:JoystickEvent = new JoystickEvent(inType, false, false, inEvent.id, inEvent.code,
-                                                   inEvent.value, inEvent.sx, inEvent.sy, data, isGamePad);
-         nmeDispatchEvent(evt);
-      }
-
-      if(GameInput.hasInstances())
-      {
-         if(inType == JoystickEvent.DEVICE_ADDED)
-         {
-            GameInput.nmeGamepadConnect(user);
-         }
-         else if(inType == JoystickEvent.DEVICE_REMOVED)
-         {
-            GameInput.nmeGamepadDisconnect(user);
-         }
-         else if(inType == JoystickEvent.AXIS_MOVE)
-         {
-            GameInput.nmeGamepadAxisMove(user, inEvent.code, inEvent.sx);
-            GameInput.nmeGamepadAxisMove(user, inEvent.code+1, inEvent.sy);
-         }
-         else if(inType == JoystickEvent.BUTTON_DOWN)
-         {
-            GameInput.nmeGamepadButton(user, inEvent.code, 1);
-         }
-         else if(inType == JoystickEvent.BUTTON_UP)
-         {
-            GameInput.nmeGamepadButton(user, inEvent.code, 0);
-         }
-         else if(inType == JoystickEvent.HAT_MOVE)
-         {
-            GameInput.nmeGamepadButton(user, GamepadButton.DPAD_UP, inEvent.sy>0.0?1:0);
-            GameInput.nmeGamepadButton(user, GamepadButton.DPAD_DOWN, inEvent.sy<0.0?1:0);
-            GameInput.nmeGamepadButton(user, GamepadButton.DPAD_LEFT, inEvent.sx<0.0?1:0);
-            GameInput.nmeGamepadButton(user, GamepadButton.DPAD_RIGHT, inEvent.sx>0.0?1:0);
-         }
-      }
-   }
-
-   public function onSysMessage(inEvent:AppEvent):Void
-   {
-      var evt = new SystemEvent(SystemEvent.SYSTEM, false, false, inEvent.value);
-      nmeDispatchEvent(evt);
-   }
-
-   public function onAppLink(inEvent:AppEvent):Void
-   {
-      var evt = new AppLinkEvent(AppLinkEvent.APP_LINK, false, false);
-      evt.url = inEvent.text;
-      nmeDispatchEvent(evt);
-   }
-    
-   public function onContextLost():Void
-   {
-      var evt = new Event(Event.CONTEXT3D_LOST);
-      nmeBroadcast(evt);
-   }
-
-
-   // -------------------------
-
-
-   private function nmeDrag(inMouse:Point)
-   {
-      var p = nmeDragObject.parent;
-      if (p != null)
-         inMouse = p.globalToLocal(inMouse);
-
-      var x = inMouse.x + nmeDragOffsetX;
-      var y = inMouse.y + nmeDragOffsetY;
-
-      if (nmeDragBounds != null) 
-      {
-         if (x < nmeDragBounds.x) x = nmeDragBounds.x;
-         else if (x > nmeDragBounds.right) x = nmeDragBounds.right;
-
-         if (y < nmeDragBounds.y) y = nmeDragBounds.y;
-         else if (y > nmeDragBounds.bottom) y = nmeDragBounds.bottom;
-      }
-
-      nmeDragObject.x = x;
-      nmeDragObject.y = y;
-   }
-
-/*
-   private function nmeNextFrameDue(inOtherTimers:Float, inTimestamp:Float)
-   {
-      if (!active && pauseWhenDeactivated)
-         return inOtherTimers;
-
-      if (frameRate > 0) 
-      {
-         var next = nmeLastRender + nmeFramePeriod - inTimestamp - nmeEarlyWakeup;
-         if (next < inOtherTimers)
-            return next;
-      }
-
-      return inOtherTimers;
-   }
-*/
-
-   override private function set_opaqueBackground(inBG:Null<Int>):Null<Int> 
-   {
-      window.setBackground(inBG);
-      if (inBG == null)
-         DisplayObject.nme_display_object_set_bg(nmeHandle, 0);
-      else
-         DisplayObject.nme_display_object_set_bg(nmeHandle, inBG | 0xff000000);
-
-      return inBG;
-   }
-
-   private function set_color(inColor:Int):Int
-   {
-      set_opaqueBackground(inColor);
-      return inColor;
-   }
- 
-
-   private function get_color():Int
-   {
-      var col = opaqueBackground;
-      return col==null ? 0 : col;
-   }
-
-
-
-   function nmeOnTouch(inEvent:AppEvent, inType:String, touchInfo:TouchInfo)
-   {
-      var stack = new Array<InteractiveObject>();
-      var obj:DisplayObject = nmeFindByID(inEvent.id);
-
-      if (obj != null)
-         obj.nmeGetInteractiveObjectStack(stack);
-
-      if (stack.length > 0) 
-      {
-         var obj = stack[0];
-         stack.reverse();
-         var local = obj.globalToLocal(new Point(inEvent.x, inEvent.y));
-         var evt = TouchEvent.nmeCreate(inType, inEvent, local, obj, inEvent.sx, inEvent.sy);
-         evt.touchPointID = inEvent.value;
-         evt.isPrimaryTouchPoint =(inEvent.flags & 0x8000) > 0;
-         //if (evt.isPrimaryTouchPoint)
-         nmeCheckInOuts(evt, stack, touchInfo);
-         obj.nmeFireEvent(evt);
-
-         if (evt.isPrimaryTouchPoint && inType == TouchEvent.TOUCH_MOVE) 
-         {
-            if (nmeDragObject != null)
-               nmeDrag(new Point(inEvent.x, inEvent.y));
-
-            var evt = MouseEvent.nmeCreate(MouseEvent.MOUSE_MOVE, inEvent, local, obj);
-            obj.nmeFireEvent(evt);
-         }
-      }
-      else 
-      {
-         //trace("No object?");
-         var evt = TouchEvent.nmeCreate(inType, inEvent, new Point(inEvent.x, inEvent.y), null, inEvent.sx, inEvent.sy);
-         evt.touchPointID = inEvent.value;
-         evt.isPrimaryTouchPoint =(inEvent.flags & 0x8000) > 0;
-         //if (evt.isPrimaryTouchPoint)
-         nmeCheckInOuts(evt, stack, touchInfo);
-      }
-   }
-
-   // -- IPollCient ----
-   public function onPoll(inTimestamp:Float)
-   {
-      //trace("poll");
-      SoundChannel.nmePollComplete();
-      URLLoader.nmePollData();
-   }
-
-   public function getNextWake(inDefaultWake:Float, inTimestamp:Float) : Float
-   {
-      var wake = inDefaultWake;
-
-      if (wake>0.001 && SoundChannel.nmeDynamicSoundCount > 0)
-         wake = 0.001;
-
-      if (wake > 0.02 && (SoundChannel.nmeCompletePending() || URLLoader.nmeLoadPending())) 
-      {
-         wake =(active || !pauseWhenDeactivated) ? 0.020 : 0.500;
-      }
-
-      return wake;
-   }
-
-   // ------------------
-
-
-   /** @private */ public function nmeStartDrag(sprite:Sprite, lockCenter:Bool, bounds:Rectangle):Void {
-      nmeDragBounds =(bounds == null) ? null : bounds.clone();
-      nmeDragObject = sprite;
-
-      if (nmeDragObject != null) 
-      {
-         if (lockCenter) 
-         {
-            nmeDragOffsetX = -nmeDragObject.width / 2;
-            nmeDragOffsetY = -nmeDragObject.height / 2;
-
-         } else 
-         {
-            var mouse = new Point(mouseX, mouseY);
-            var p = nmeDragObject.parent;
-            if (p != null)
-               mouse = p.globalToLocal(mouse);
-
-            nmeDragOffsetX = nmeDragObject.x - mouse.x;
-            nmeDragOffsetY = nmeDragObject.y - mouse.y;
-         }
-      }
-   }
-
-   public function nmeStopDrag(sprite:Sprite):Void
-   {
-      nmeDragBounds = null;
-      nmeDragObject = null;
-   }
-
-   public function setPreemtiveGcFrequency(inFrames:Int)
-   {
-      #if cpp
-      #if !(hxcpp_api_level>=310)
-      if (inFrames<0)
-         inFrames = 0;
-      #end
-      nmePreemptiveGcSince = 0;
-      nmePreemptiveGcFreq = inFrames;
-      if (nmeCollectionLock==null && inFrames!=0)
-      {
-         nmeCollectionLock = new Lock();
-         nmeCollectionAgency = Thread.create( function() {
-           while(true)
-           {
-              nmeCollectionLock.wait();
-              Gc.run(false);
-           }
-           } );
-      }
-      #end
-   }
-   public function setSmartPreemtiveGc()
-   {
-      setPreemtiveGcFrequency(-1);
-   }
-
-   public static function setFixedOrientation(inOrientation:Int):Void
-   {
-      Application.setFixedOrientation(inOrientation);
-   }
-
-
-   // Ignored - use Application.setFixedOrientation instead.
-   public static dynamic function shouldRotateInterface(inOrientation:Int):Bool { return true; }
-
-   public function showCursor(inShow:Bool) 
-   {
-      nme_stage_show_cursor(nmeHandle, inShow);
-   }
-
-   // Getters & Setters
-   private function get_focus():InteractiveObject 
-   {
-      var id = nme_stage_get_focus_id(nmeHandle);
-      var obj:DisplayObject = nmeFindByID(id);
-      return cast obj;
-   }
-
-   private function set_focus(inObject:InteractiveObject):InteractiveObject 
-   {
-      if (inObject == null)
-         nme_stage_set_focus(nmeHandle, null);
-      else
-         nme_stage_set_focus(nmeHandle, inObject.nmeHandle);
-      return inObject;
-   }
-
-   private function set_frameRate(inRate:Float):Float 
-   {
-      if (nmeFrameTimer!=null)
-      {
-        nmeFrameTimer.fps = inRate;
-      }
-      return inRate;
-   }
-   private function get_frameRate():Float return nmeFrameTimer==null ? 0 : nmeFrameTimer.fps;
-
-
-   private override function get_stage():Stage 
-   {
-      return this;
-   }
-
-   public function resize(width:Int, height:Int):Void window.resize(width,height);
-
-   private function get_stageFocusRect():Bool { return nme_stage_get_focus_rect(nmeHandle); }
-   private function set_stageFocusRect(inVal:Bool):Bool 
-   {
-      nme_stage_set_focus_rect(nmeHandle, inVal);
-      return inVal;
-   }
-   private function get_active():Bool return window.active;
-   private function get_align():StageAlign return window.get_align();
-   private function set_align(inMode:StageAlign):StageAlign return window.set_align(inMode);
-   private function get_displayState():StageDisplayState return window.get_displayState();
-   private function set_displayState(inState:StageDisplayState):StageDisplayState return window.set_displayState(inState);
-   private function get_dpiScale():Float return window.get_dpiScale();
-   private function get_quality():StageQuality return window.get_quality();
-   private function set_quality(inQuality:StageQuality) return window.set_quality(inQuality);
-   private function get_scaleMode():StageScaleMode return window.get_scaleMode();
-   private function set_scaleMode(inMode:StageScaleMode) return window.set_scaleMode(inMode);
-   private function get_stageHeight():Int return window.height;
-   private function get_stageWidth():Int return window.width;
-   private function get_isOpenGL():Bool return window.get_isOpenGL();
-   private function get_renderRequest():Void->Bool return window.renderRequest;
-   private function set_renderRequest(f:Void->Bool):Void->Bool return window.renderRequest = f;
-
-   // Native Methods
-   private static var nme_render_stage = PrimeLoader.load("nme_render_stage", "ov");
-   private static var nme_set_render_gc_free = PrimeLoader.load("nme_set_render_gc_free", "bv");
-   private static var nme_stage_get_focus_id = PrimeLoader.load("nme_stage_get_focus_id", "oi");
-   private static var nme_get_notch_height_stage = PrimeLoader.load("nme_get_notch_height_stage", "oo");
-   private static var nme_stage_set_focus = PrimeLoader.load("nme_stage_set_focus", "oov");
-   private static var nme_stage_get_focus_rect = PrimeLoader.load("nme_stage_get_focus_rect", "ob");
-   private static var nme_stage_set_focus_rect = PrimeLoader.load("nme_stage_set_focus_rect", "obv");
-   private static var nme_stage_resize_window = PrimeLoader.load("nme_stage_resize_window", "oiiv");
-   private static var nme_stage_show_cursor = PrimeLoader.load("nme_stage_show_cursor", "obv");
-  
-   private static var nme_stage_get_orientation = PrimeLoader.load("nme_stage_get_orientation", "i");
-   private static var nme_stage_get_normal_orientation = PrimeLoader.load("nme_stage_get_normal_orientation", "i");
-   private static var nme_stage_check_cache = PrimeLoader.load("nme_stage_check_cache", "ob");
+	
+	@:noCompletion public static var __earlyWakeup = 0.005;
+	@:noCompletion public static var __exiting = false;
+	
+	public static var OrientationPortrait = 1;
+	public static var OrientationPortraitUpsideDown = 2;
+	public static var OrientationLandscapeRight = 3;
+	public static var OrientationLandscapeLeft = 4;
+	public static var OrientationFaceUp = 5;
+	public static var OrientationFaceDown = 6;
+	public static var OrientationPortraitAny = 7;	// This and below for use with setFixedOrientation() on iOS
+	public static var OrientationLandscapeAny = 8;
+	public static var OrientationAny = 9;
+
+	public var allowsFullScreen:Bool;
+	public var autos3d (get, set):Bool;
+	public var active (default, null):Bool;
+	public var align (get, set):StageAlign;
+	public var color (get, set):Int;
+	public var displayState (get, set):StageDisplayState;
+	public var dpiScale (get, null):Float;
+	public var focus (get, set):InteractiveObject;
+	public var frameRate (default, set): Float;
+	public var isOpenGL (get, null):Bool;
+	public var onKey:Int -> Bool -> Int -> Int -> Void; 
+	public var onQuit:Void -> Void; 
+	public var pauseWhenDeactivated:Bool;
+	public var quality (get, set):StageQuality;
+	public var renderRequest:Void -> Void; 
+	public var scaleMode (get, set):StageScaleMode;
+	public var softKeyboardRect (get, null):Rectangle;
+	public var stage3Ds (default, null):Vector<Stage3D>;
+	public var stageFocusRect (get, set):Bool;
+	public var stageHeight (get, null):Int;
+	public var stageWidth (get, null):Int;
+	
+	@:noCompletion private static var efLeftDown = 0x0001;
+	@:noCompletion private static var efShiftDown = 0x0002;
+	@:noCompletion private static var efCtrlDown = 0x0004;
+	@:noCompletion private static var efAltDown = 0x0008;
+	@:noCompletion private static var efCommandDown = 0x0010;
+	@:noCompletion private static var efLocationRight = 0x4000;
+	@:noCompletion private static var efNoNativeClick = 0x10000;
+	@:noCompletion private static var sClickEvents = [ "click", "middleClick", "rightClick" ];
+	@:noCompletion private static var sDownEvents = [ "mouseDown", "middleMouseDown", "rightMouseDown" ];
+	@:noCompletion private static var sUpEvents = [ "mouseUp", "middleMouseUp", "rightMouseUp" ];
+	
+	@:noCompletion private static var __mouseChanges:Array<String> = [ MouseEvent.MOUSE_OUT, MouseEvent.MOUSE_OVER, MouseEvent.ROLL_OUT, MouseEvent.ROLL_OVER ];
+	@:noCompletion private static var __touchChanges:Array<String> = [ TouchEvent.TOUCH_OUT, TouchEvent.TOUCH_OVER,	TouchEvent.TOUCH_ROLL_OUT, TouchEvent.TOUCH_ROLL_OVER ];
+	
+	#if android
+	@:noCompletion private var __hatValue:Int;
+	#end
+	@:noCompletion private var __joyAxisData:Map <Int, Array <Float>>;
+	@:noCompletion private var __dragBounds:Rectangle;
+	@:noCompletion private var __dragObject:Sprite;
+	@:noCompletion private var __dragOffsetX:Float;
+	@:noCompletion private var __dragOffsetY:Float;
+	@:noCompletion private var __focusOverObjects:Array<InteractiveObject>;
+	@:noCompletion private var __framePeriod:Float;
+	@:noCompletion private var __invalid:Bool;
+	@:noCompletion private var __lastClickTime:Int;
+	@:noCompletion private var __lastDown:Array<InteractiveObject>;
+	@:noCompletion private var __lastRender:Float;
+	@:noCompletion private var __mouseOverObjects:Array<InteractiveObject>;
+	@:noCompletion private var __nextRender:Float;
+	@:noCompletion private var __softKeyboardRect:Rectangle;
+	@:noCompletion private var __touchInfo:Map <Int, TouchInfo>;
+	
+	
+	public function new (handle:Dynamic, width:Int, height:Int) {
+		
+		#if hxtelemetry
+		Telemetry.__initialize ();
+		#end
+		
+		super (handle, "Stage");
+		
+		__mouseOverObjects = [];
+		__focusOverObjects = [];
+		active = true;
+		allowsFullScreen = true;
+		pauseWhenDeactivated = true;
+		
+		#if (android && !lime_hybrid)
+		__hatValue = 0;
+		renderRequest = lime_stage_request_render;
+		#else
+		renderRequest = null;
+		#end
+		
+		#if ios
+		GL.defaultFramebuffer = new GLFramebuffer (GL.getParameter (GL.FRAMEBUFFER_BINDING), GL.version);
+		#end
+		
+		lime_set_stage_handler (__handle, __processStageEvent, width, height);
+		__invalid = false;
+		__lastRender = 0;
+		__lastDown = [];
+		__lastClickTime = 0;
+		__nextRender = 0;
+		this.frameRate = 100;
+		__touchInfo = new Map <Int, TouchInfo> ();
+		__joyAxisData = new Map <Int, Array<Float>> ();
+		
+		stage3Ds = new Vector ();
+		stage3Ds.push (new Stage3D ());
+		
+		#if(cpp && (safeMode || debug))
+ 		untyped __global__.__hxcpp_set_critical_error_handler( function(message:String) {throw message; } );
+ 		#end
+	}
+	
+	public function getNotchHeight():Int
+	{
+		var notchHeight:Int = lime_get_notch_height_stage(nmeHandle);
+		return notchHeight;
+	}
+	
+	
+	public static dynamic function getOrientation ():Int {
+		
+		return lime_stage_get_orientation ();
+		
+	}
+	
+	
+	public static dynamic function getNormalOrientation ():Int {
+		
+		return lime_stage_get_normal_orientation ();
+		
+	}
+	
+	
+	public function invalidate ():Void {
+		
+		__invalid = true;
+		
+	}
+	
+	
+	public function resize (width:Int, height:Int):Void {
+		
+		lime_stage_resize_window (__handle, width, height);
+		
+	}
+	
+	
+	public function setResolution (width:Int, height:Int):Void {
+		lime_stage_set_resolution(__handle, width, height);
+	}
+	
+	
+	public function setScreenMode (mode:ScreenMode):Void {
+		lime_stage_set_screenmode(__handle, mode.width, mode.height, mode.refreshRate, 0);
+	}
+	
+	
+	public function setFullscreen (full:Bool):Void {
+		lime_stage_set_fullscreen(__handle, full);
+	}
+	
+	
+	public static function setFixedOrientation (orientation:Int):Void {
+		
+		// If you set this, you don't need to set the 'shouldRotateInterface' function.
+		lime_stage_set_fixed_orientation (orientation);
+		
+	}
+	
+	
+	public static dynamic function shouldRotateInterface (orientation:Int):Bool {
+		
+		return orientation == OrientationPortrait;
+		
+	}
+	
+	
+	public function showCursor (show:Bool):Void {
+		
+		lime_stage_show_cursor (__handle, show);
+		
+	}
+	
+	
+	@:noCompletion private function __checkFocusInOuts (event:Dynamic, stack:Array<InteractiveObject>):Void {
+		
+		var newLength = stack.length;
+		var newObject = newLength > 0 ? stack[newLength - 1] : null;
+		var oldLength = __focusOverObjects.length;
+		var oldObject = oldLength > 0 ? __focusOverObjects[oldLength - 1] : null;
+		
+		if (newObject != oldObject) {
+			
+			if (oldObject != null) {
+				
+				var focusOut = new FocusEvent (FocusEvent.FOCUS_OUT, true, false, newObject, event.flags > 0, event.code);
+				focusOut.target = oldObject;
+				oldObject.__fireEvent (focusOut);
+				
+			}
+			
+			if (newObject != null) {
+				
+				var focusIn = new FocusEvent (FocusEvent.FOCUS_IN, true, false, oldObject, event.flags > 0, event.code);
+				focusIn.target = newObject;
+				newObject.__fireEvent (focusIn);
+				
+			}
+			
+			__focusOverObjects = stack;
+			
+		}
+		
+	}
+	
+	
+	@:noCompletion private function __checkInOuts (event:MouseEvent, stack:Array<InteractiveObject>, touchInfo:TouchInfo = null):Bool {
+		
+		var prev = (touchInfo == null ? __mouseOverObjects : touchInfo.touchOverObjects);
+		var events = (touchInfo == null ? __mouseChanges : __touchChanges);
+		
+		var newLength = stack.length;
+		var newObject = newLength > 0 ? stack[newLength - 1] : null;
+		var oldLength = prev.length;
+		var oldObject = oldLength > 0 ? prev[oldLength - 1] : null;
+		
+		if (newObject != oldObject) {
+			
+			if (oldObject != null) {
+				
+				oldObject.__fireEvent (event.__createSimilar (events[0], newObject, oldObject));
+				
+			}
+			
+			if (newObject != null) {
+				
+				newObject.__fireEvent (event.__createSimilar (events[1], newObject, newObject));
+				
+			}
+			
+			var common = 0;
+			while (common < newLength && common < oldLength && stack[common] == prev[common]) {
+				
+				common++;
+				
+			}
+			
+			var rollOut = event.__createSimilar (events[2], newObject, oldObject);
+			
+			var i = oldLength - 1;
+			while (i >= common) {
+				
+				prev[i].__dispatchEvent (rollOut);
+				i--;
+				
+			}
+			
+			var rollOver = event.__createSimilar (events[3], oldObject);
+			
+			var i = newLength - 1;
+			while (i >= common) {
+				
+				stack[i].__dispatchEvent (rollOver);
+				i--;
+				
+			}
+			
+			if (touchInfo == null) {
+				
+				__mouseOverObjects = stack;
+				
+			} else {
+				
+				touchInfo.touchOverObjects = stack;
+				
+			}
+			
+			return false;
+			
+		}
+		
+		return true;
+		
+	}
+	
+	
+	@:noCompletion private function __checkRender ():Void {
+		
+		if (frameRate > 0) {
+			
+			var now = Timer.stamp ();
+			if (now >= __nextRender) {
+				
+				__lastRender = now;
+				
+				while (__nextRender < __lastRender) {
+					
+					__nextRender += __framePeriod;
+					
+				}
+				
+				if (renderRequest != null) {
+					
+					renderRequest ();
+					
+				} else {
+					
+					__render (true);
+					
+				}
+				
+			}
+			
+		} #if emscripten else {
+			
+			__render (true);
+			
+		}
+		#end
+		
+	}
+	
+	
+	#if android
+	#if no_traces
+	@:functionCode("try {")
+	@:functionTailCode(' } catch(Dynamic e) { __hx_dump_stack(); }')
+	#else
+	@:noCompletion @:keep private function dummyTrace ():Void { trace (""); }
+	@:functionCode("try {")
+	@:functionTailCode(' } catch(Dynamic e) { __hx_dump_stack(); ::haxe::Log_obj::trace(HX_CSTRING("Uncaught exception: ") + e,hx::SourceInfo(HX_CSTRING("Stage.hx"),0,HX_CSTRING("flash.display.Stage"),HX_CSTRING("__doProcessStageEvent"))); __hxcpp_exit(1);} return 0;')
+	#end
+	#end
+	@:noCompletion private function __doProcessStageEvent (event:Dynamic):Float {
+		
+		#if hxtelemetry
+		Telemetry.__startTiming (TelemetryCommandName.EVENT);
+		#end
+		
+		var result = 0.0;
+		var type = Std.int (Reflect.field (event, "type"));
+		
+#if !debug		
+		try {
+#end			
+			switch (type) {
+				
+				case 2: // etChar
+					
+					if (onKey != null)
+						untyped onKey (event.code, event.down, event.char, event.flags);
+				
+				case 1: // etKeyDown
+					
+					__onKey (event, KeyboardEvent.KEY_DOWN);
+				
+				case 3: // etKeyUp
+					
+					__onKey (event, KeyboardEvent.KEY_UP);
+				
+				case 4: // etMouseMove
+					
+					__onMouse (event, MouseEvent.MOUSE_MOVE, true);
+				
+				case 5: // etMouseDown
+					
+					__onMouse (event, MouseEvent.MOUSE_DOWN, true);
+				
+				case 6: // etMouseClick
+					
+					__onMouse (event, MouseEvent.CLICK, true);
+				
+				case 7: // etMouseUp
+					
+					__onMouse (event, MouseEvent.MOUSE_UP, true);
+				
+				case 8: // etResize
+					
+					__onResize (event.x, event.y);
+					if (renderRequest == null) {
+						
+						__render (false);
+						
+					}
+				
+				case 9: // etPoll
+					
+					__pollTimers ();
+				
+				case 10: // etQuit
+					
+					if (onQuit != null)
+						onQuit ();
+				
+				case 11: // etFocus
+					
+					__onFocus (event);
+				
+				case 12: // etShouldRotate
+					
+					if (shouldRotateInterface (event.value))
+						event.result = 2;
+				
+				case 14: // etRedraw
+					
+					__render (true);
+				
+				case 15: // etTouchBegin
+					
+					var touchInfo = new TouchInfo ();
+					__touchInfo.set (event.value, touchInfo);
+					__onTouch (event, TouchEvent.TOUCH_BEGIN, touchInfo);
+					
+					if ((event.flags & 0x8000) > 0) {
+						
+						__onMouse (event, MouseEvent.MOUSE_DOWN, false);
+						
+					}
+				
+				case 16: // etTouchMove
+					
+					var touchInfo = __touchInfo.get (event.value);
+					__onTouch (event, TouchEvent.TOUCH_MOVE, touchInfo);
+
+					if ((event.flags & 0x8000) > 0) {
+						
+						__onMouse (event, MouseEvent.MOUSE_MOVE, false);
+						
+					}
+				
+				case 17: // etTouchEnd
+					
+					var touchInfo = __touchInfo.get (event.value);
+					__onTouch (event, TouchEvent.TOUCH_END, touchInfo);
+					__touchInfo.remove (event.value);
+					
+					if ((event.flags & 0x8000) > 0) {
+						
+						__onMouse (event, MouseEvent.MOUSE_UP, false);
+						
+					}
+				
+				case 18: // etTouchTap
+					
+					//_onTouchTap (event.TouchEvent.TOUCH_TAP);
+				
+				case 19: // etChange
+					
+					__onChange (event);
+				
+				case 20: // etActivate
+					
+					__setActive (true);
+				
+				case 21: // etDeactivate
+					
+					__setActive (false);
+				
+				case 22: // etGotInputFocus
+					
+					__dispatchEvent (new Event (FocusEvent.FOCUS_IN));
+				
+				case 23: // etLostInputFocus
+					
+					__dispatchEvent (new Event (FocusEvent.FOCUS_OUT));
+				
+				case 24: // etJoyAxisMove
+					
+					__onJoystick (event, JoystickEvent.AXIS_MOVE);
+				
+				case 25: // etJoyBallMove
+					
+					__onJoystick (event, JoystickEvent.BALL_MOVE);
+				
+				case 26: // etJoyHatMove
+					
+					__onJoystick (event, JoystickEvent.HAT_MOVE);
+				
+				case 27: // etJoyButtonDown
+					
+					__onJoystick (event, JoystickEvent.BUTTON_DOWN);
+				
+				case 28: // etJoyButtonUp
+					
+					__onJoystick (event, JoystickEvent.BUTTON_UP);
+				
+				case 29: //etJoyDeviceAdded
+
+			        __onJoystick (event, JoystickEvent.DEVICE_ADDED);
+
+		        case 30: //etJoyDeviceRemoved
+
+		    	    __onJoystick (event, JoystickEvent.DEVICE_REMOVED);
+
+				case 31: // etSysWM
+					
+					__onSysWM (event);
+				
+				case 32: // etRenderContextLost
+					
+					__onRenderContext (false);
+				
+				case 33: // etRenderContextRestored
+					
+					__onRenderContext (true);
+				
+				// TODO: user, sys_wm, sound_finished
+				
+			}
+#if !debug
+		} catch (error:Dynamic) {
+			
+			Lib.rethrow (error);
+			
+		}
+#end		
+		
+		#if hxtelemetry
+		Telemetry.__endTiming (TelemetryCommandName.EVENT);
+		#end
+		
+		result = __updateNextWake ();
+		return result;
+		
+	}
+	
+	
+	@:noCompletion private function __processStageEvent (event:Dynamic):Dynamic {
+		
+		__doProcessStageEvent (event);
+		return null;
+		
+	}
+	
+	
+	@:noCompletion private function __drag (mouse:Point):Void {
+		
+		var parent = __dragObject.parent;
+		if (parent != null) {
+			
+			mouse = parent.globalToLocal (mouse);
+			
+		}
+		
+		var x = mouse.x + __dragOffsetX;
+		var y = mouse.y + __dragOffsetY;
+		
+		if (__dragBounds != null) {
+			
+			if (x < __dragBounds.x) {
+				
+				x = __dragBounds.x;
+				
+			} else if (x > __dragBounds.right) {
+				
+				x = __dragBounds.right;
+				
+			}
+			
+			if (y < __dragBounds.y) {
+				
+				y = __dragBounds.y;
+				
+			} else if (y > __dragBounds.bottom) {
+				
+				y = __dragBounds.bottom;
+				
+			}
+			
+		}
+		
+		__dragObject.x = x;
+		__dragObject.y = y;
+		
+	}
+	
+	
+	@:noCompletion private function __nextFrameDue (otherTimers:Float) {
+		
+		if (!active && pauseWhenDeactivated) {
+			
+			return otherTimers;
+			
+		}
+		
+		if (frameRate > 0) {
+			
+			var next = __nextRender - Timer.stamp () - __earlyWakeup;
+			if (next < otherTimers) {
+				
+				return next;
+				
+			}
+			
+		}
+		
+		return otherTimers;
+		
+	}
+	
+	
+	@:noCompletion private function __onChange (event:Dynamic):Void {
+		
+		var object = __findByID (event.id);
+		
+		if (object != null) {
+			
+			object.__fireEvent (new Event (Event.CHANGE, true));
+			
+		}
+		
+	}
+	
+	
+	@:noCompletion private function __onFocus (event:Dynamic):Void {
+		
+		var stack = new Array<InteractiveObject>();
+		var object = __findByID (event.id);
+		
+		if (object != null) {
+			
+			object.__getInteractiveObjectStack (stack);
+			
+		}
+		
+		if (stack.length > 0 && (event.value == 1 || event.value == 2)) {
+			
+			var object = stack[0];
+			var focusEvent = new FocusEvent (event.value == 1 ? FocusEvent.MOUSE_FOCUS_CHANGE : FocusEvent.KEY_FOCUS_CHANGE, true, true, __focusOverObjects.length == 0 ? null : __focusOverObjects[0], event.flags > 0, event.code);
+			object.__fireEvent (focusEvent);
+			
+			if (focusEvent.__getIsCancelled ()) {
+				
+				event.result = 1;
+				return;
+				
+			}
+			
+		}
+		
+		stack.reverse ();
+		__checkFocusInOuts (event, stack);
+		
+	}
+	
+	
+	@:noCompletion private function __onJoystick (event:Dynamic, type:String):Void {
+		
+		var joystickEvent:JoystickEvent = null;
+		
+		switch (type) {
+			
+			case JoystickEvent.AXIS_MOVE:
+				
+				var data = __joyAxisData.get (event.id);
+				if (data == null) {
+					
+					data = [ 0.0, 0.0, 0.0, 0.0 ];
+					
+				}
+				
+				var value:Float = event.value / 32767; // Range: -32768 to 32767
+				if (value < -1) value = -1;
+				
+				while (data.length < event.code) {
+					
+					data.push (0);
+					
+				}
+				
+				var cachedAxisData:String = '';
+				if (__joyAxisData.exists(event.id)) cachedAxisData = __joyAxisData.get(event.id).toString();
+				data[event.code] = value;
+				if (__joyAxisData.exists(event.id)) {
+				
+					__joyAxisData.set (event.id, data);
+				
+					if (__joyAxisData.get(event.id).toString() == cachedAxisData) { //check if anything has changed from previous registered state. If not, dismiss the event
+						
+						return;
+					
+					} else {
+						
+						joystickEvent = new JoystickEvent (type, false, false, event.id, 0, data[0], data[1], data[2]);
+						joystickEvent.axis = data.copy ();
+							
+					}
+				} else {
+					
+					__joyAxisData.set (event.id, data);
+					joystickEvent = new JoystickEvent (type, false, false, event.id, 0, data[0], data[1], data[2]);
+					joystickEvent.axis = data.copy ();
+				}
+				
+			case JoystickEvent.BALL_MOVE:
+				
+				joystickEvent = new JoystickEvent (type, false, false, event.id, event.code, event.x, event.y);
+			
+		    case JoystickEvent.DEVICE_ADDED:
+		
+		        joystickEvent = new JoystickEvent (type, false, false, event.id, 0, event.x); 
+
+		    case JoystickEvent.DEVICE_REMOVED:
+
+		        joystickEvent = new JoystickEvent (type, false, false, event.id);
+
+			case JoystickEvent.HAT_MOVE:
+				
+				var x = 0;
+				var y = 0;
+				
+				if (event.value & 0x01 != 0) {
+					
+					y = -1;
+					
+				} else if (event.value & 0x04 != 0) {
+					
+					y = 1;
+					
+				}
+				
+				if (event.value & 0x02 != 0) {
+					
+					x = 1;
+					
+				} else if (event.value & 0x08 != 0) {
+					
+					x = -1;
+					
+				}
+				
+				joystickEvent = new JoystickEvent (type, false, false, event.id, event.code, x, y);
+				
+			default:
+				
+				#if android
+				if (event.code >= 19 && event.code <= 22) {
+					
+					if (type == JoystickEvent.BUTTON_DOWN) {
+						
+						switch (event.code) {
+							
+							case 19: __hatValue |= 0x01; //up
+							case 20: __hatValue |= 0x04; //down
+							case 21: __hatValue |= 0x08; //left
+							case 22: __hatValue |= 0x02; //right
+							
+						}
+						
+					} else {
+						
+						switch (event.code) {
+							
+							case 19: __hatValue &= ~0x01; //up
+							case 20: __hatValue &= ~0x04; //down
+							case 21: __hatValue &= ~0x08; //left
+							case 22: __hatValue &= ~0x02; //right
+							
+						}
+						
+					}
+					
+					event.value = __hatValue;
+					__onJoystick (event, JoystickEvent.HAT_MOVE);
+					return;
+					
+				} else {
+					
+					event.code -= 96;
+					
+				}
+				#end
+				
+				joystickEvent = new JoystickEvent (type, false, false, event.id, event.code);
+			
+		}
+		
+		__dispatchEvent (joystickEvent);
+		
+	}
+	
+	
+	@:noCompletion private function __onKey (event:Dynamic, type:String):Void {
+		
+		var stack = new Array<InteractiveObject> ();
+		var object = __findByID (event.id);
+		
+		if (object != null) {
+			
+			object.__getInteractiveObjectStack (stack);
+			
+		}
+		
+		if (stack.length > 0) {
+			
+			var value = event.value;
+			if (event.value >= 96 && event.value <= 122) event.value -= 32;
+			
+			var object = stack[0];
+			var flags:Int = event.flags;
+			
+			var keyboardEvent = new KeyboardEvent (type, true, true, event.code, event.value, ((flags & efLocationRight) == 0) ? 1 : 0, (flags & efCtrlDown) != 0, (flags & efAltDown) != 0, (flags & efShiftDown) != 0);
+			object.__fireEvent (keyboardEvent);
+			
+			if (keyboardEvent.__getIsCancelled ()) {
+				
+				event.result = 1;
+				
+			} else {
+				
+				#if desktop
+				#if (windows || linux)
+				if (flags & efAltDown > 0 && type == KeyboardEvent.KEY_DOWN && event.code == Keyboard.ENTER) {
+				#elseif (mac)
+				if (flags & efCtrlDown > 0 && flags & efCommandDown > 0 && type == KeyboardEvent.KEY_DOWN && event.value == Keyboard.F) {
+				#end
+					
+					if (displayState == StageDisplayState.NORMAL) {
+						
+						displayState = StageDisplayState.FULL_SCREEN_INTERACTIVE;
+						
+					} else {
+						
+						displayState = StageDisplayState.NORMAL;
+						
+					}
+					
+				}
+				#end
+				
+			}
+			
+		}
+		
+	}
+	
+	
+	@:noCompletion private function __onMouse (event:Dynamic, type:String, fromMouse:Bool):Void {
+		
+		var button:Int = event.value;
+		
+		if (!fromMouse)
+			button = 0;
+		
+		var wheel = 0;
+		
+		if (type == MouseEvent.MOUSE_DOWN) {
+			
+			if (button > 2) {
+				
+				return;
+				
+			}
+			
+			type = sDownEvents[button];
+			
+		} else if (type == MouseEvent.MOUSE_UP) {
+			
+			if (button > 2) {
+				
+				type = MouseEvent.MOUSE_WHEEL;
+				wheel = button == 3 ? 1 : -1;
+				
+			} else {
+				
+				type = sUpEvents[button];
+				
+			}
+			
+		}
+		
+		if (__dragObject != null) {
+			
+			__drag (new Point (event.x, event.y));
+			
+		}
+		
+		var stack = new Array<InteractiveObject> ();
+		var object = __findByID (event.id);
+		
+		if (object != null) {
+			
+			object.__getInteractiveObjectStack (stack);
+			
+		}
+		
+		var local:Point = null;
+		
+		if (stack.length > 0) {
+			
+			var object = stack[0];
+			stack.reverse ();
+			local = object.globalToLocal (new Point (event.x, event.y));
+			var mouseEvent = MouseEvent.__create (type, event, local, object);
+			mouseEvent.delta = wheel;
+			
+			if (fromMouse || (event.flags & 0x8000) > 0) {
+				
+				__checkInOuts (mouseEvent, stack);
+				
+			}
+			
+			object.__fireEvent (mouseEvent);
+			
+		} else {
+			
+			local = new Point (event.x, event.y);
+			var mouseEvent = MouseEvent.__create (type, event, local, null);
+			mouseEvent.delta = wheel;
+			
+			if (fromMouse || (event.flags & 0x8000) > 0) {
+				
+				__checkInOuts (mouseEvent, stack);
+				
+			}
+			
+		}
+		
+		var clickObject = stack.length > 0 ? stack[stack.length - 1] : this;
+		
+		if ((type == MouseEvent.MOUSE_DOWN || type == MouseEvent.MIDDLE_MOUSE_DOWN || type == MouseEvent.RIGHT_MOUSE_DOWN) && button < 3) {
+			
+			__lastDown[button] = clickObject;
+			
+		} else if ((type == MouseEvent.MOUSE_UP || type == MouseEvent.MIDDLE_MOUSE_UP || type == MouseEvent.RIGHT_MOUSE_UP) && button < 3) {
+			
+			if (clickObject == __lastDown[button]) {
+				
+				var mouseEvent = MouseEvent.__create (sClickEvents[button], event, local, clickObject);
+				clickObject.__fireEvent (mouseEvent);
+				
+				if (button == 0 && clickObject.doubleClickEnabled) {
+					
+					var now = Lib.getTimer ();
+					if (now - __lastClickTime < 500) {
+						
+						var mouseEvent = MouseEvent.__create (MouseEvent.DOUBLE_CLICK, event, local, clickObject);
+						clickObject.__fireEvent (mouseEvent);
+						__lastClickTime = 0;
+						
+					} else {
+						
+						__lastClickTime = now;
+						
+					}
+					
+				}
+				
+			}
+			
+			__lastDown[button] = null;
+			
+		}
+		
+	}
+	
+	
+	@:noCompletion private function __onRenderContext (active:Bool):Void {
+		
+		#if ios
+		GL.defaultFramebuffer = active ? new GLFramebuffer (GL.getParameter (GL.FRAMEBUFFER_BINDING), GL.version) : null;
+		#end
+		
+		var event = new Event (!active ? OpenGLView.CONTEXT_LOST : OpenGLView.CONTEXT_RESTORED);
+		__dispatchEvent (event);
+		
+	}
+	
+	
+	@:noCompletion private function __onResize (width:Float, height:Float):Void {
+		
+		var event = new Event (Event.RESIZE);
+		__dispatchEvent (event);
+		
+	}
+	
+	
+	@:noCompletion private function __onSysWM (event:Dynamic):Void {
+		
+		var event = new SystemEvent (SystemEvent.SYSTEM, false, false, event.value);
+		__dispatchEvent (event);
+		
+	}
+	
+	
+	@:noCompletion private function __onTouch (event:Dynamic, type:String, touchInfo:TouchInfo):Void {
+		
+		var stack = new Array<InteractiveObject> ();
+		var object = __findByID (event.id);
+		
+		if (object != null) {
+			
+			object.__getInteractiveObjectStack (stack);
+			
+		}
+		
+		if (stack.length > 0) {
+			
+			var object = stack[0];
+			stack.reverse ();
+			var local = object.globalToLocal (new Point (event.x, event.y));
+			var touchEvent = TouchEvent.__create (type, event, local, object, event.scaleX, event.scaleY);
+			touchEvent.touchPointID = event.value;
+			touchEvent.isPrimaryTouchPoint = (event.flags & 0x8000) > 0;
+			
+			__checkInOuts (touchEvent, stack, touchInfo);
+			object.__fireEvent (touchEvent);
+			
+		} else {
+			
+			var touchEvent = TouchEvent.__create (type, event, new Point (event.x, event.y), null, event.scaleX, event.scaleY);
+			touchEvent.touchPointID = event.value;
+			touchEvent.isPrimaryTouchPoint = (event.flags & 0x8000) > 0;
+			__checkInOuts (touchEvent, stack, touchInfo);
+			
+		}
+		
+	}
+	
+	
+	@:noCompletion public function __pollTimers ():Void {
+		
+		if (__exiting) {
+			
+			return;
+			
+		}
+		
+		#if !java
+		Timer.__checkTimers ();
+		#end
+		#if !disable_legacy_audio
+		SoundChannel.__pollComplete ();
+		#end
+		#if !disable_legacy_networking
+		URLLoader.__pollData ();
+		#end
+		
+		#if (tools && lime_legacy && !lime_hybrid) 
+		DefaultAssetLibrary.__poll ();
+		#end
+		
+		__checkRender ();
+		
+	}
+	
+	
+	@:noCompletion public function __render (sendEnterFrame:Bool):Void {
+		
+		if (!active) {
+			
+			return;
+			
+		}
+		
+		if (sendEnterFrame) {
+			
+			#if hxtelemetry
+			Telemetry.__advanceFrame ();
+			#end
+			
+			__broadcast (new Event (Event.ENTER_FRAME));
+			
+		}
+		
+		if (__invalid) {
+			
+			__invalid = false;
+			__broadcast (new Event (Event.RENDER));
+			
+		}
+		
+		#if hxtelemetry
+		var stack = Telemetry.__unwindStack ();
+		Telemetry.__startTiming (TelemetryCommandName.RENDER);
+		#end
+		
+		lime_render_stage (__handle);
+		
+		#if hxtelemetry
+		Telemetry.__endTiming (TelemetryCommandName.RENDER);
+		Telemetry.__rewindStack (stack);
+		#end
+		
+	}
+	
+	
+	@:noCompletion public function __setActive (value:Bool):Void {
+		
+		if (active != value) {
+			
+			active = value;
+			
+			if (!active) {
+				
+				__lastRender = Timer.stamp ();
+				__nextRender = __lastRender + __framePeriod;
+				
+			}
+			
+			var event = new Event (active ? Event.ACTIVATE : Event.DEACTIVATE);
+			__broadcast (event);
+			
+			if (value) {
+				
+				__pollTimers ();
+				
+				#if android
+				var focus = get_focus ();
+				if (focus != null && focus.needsSoftKeyboard) {
+					
+					Timer.delay (function () {
+						
+						if (focus == get_focus()) {
+							
+							requestSoftKeyboard ();
+							
+						}
+						
+					}, 30);
+					
+				}
+				#end
+				
+			} else {
+				
+				#if android
+				__dismissSoftKeyboard ();
+				#end
+				
+			}
+			
+		}
+		
+	}
+	
+	
+	@:noCompletion public function __startDrag (sprite:Sprite, lockCenter:Bool, bounds:Rectangle):Void {
+		
+		__dragBounds = (bounds == null) ? null : bounds.clone ();
+		__dragObject = sprite;
+		
+		if (__dragObject != null) {
+			
+			if (lockCenter) {
+				
+				__dragOffsetX = -__dragObject.width / 2;
+				__dragOffsetY = -__dragObject.height / 2;
+				
+			} else {
+				
+				var mouse = new Point (mouseX, mouseY);
+				var parent = __dragObject.parent;
+				
+				if (parent != null) {
+					
+					mouse = parent.globalToLocal (mouse);
+					
+				}
+				
+				__dragOffsetX = __dragObject.x - mouse.x;
+				__dragOffsetY = __dragObject.y - mouse.y;
+				
+			}
+			
+		}
+		
+	}
+	
+	
+	@:noCompletion public function __stopDrag (sprite:Sprite):Void {
+		
+		__dragBounds = null;
+		__dragObject = null;
+		
+	}
+	
+	
+	@:noCompletion public function __updateNextWake ():Float {
+		
+		#if java
+		return 0;
+		#else
+		var nextWake = Timer.__nextWake (315000000.0);
+		
+		#if !disable_legacy_audio
+		if (nextWake > 0.001 && SoundChannel.__dynamicSoundCount > 0) {
+			
+			nextWake = 0.001;
+			
+		}
+		#end
+		
+		#if (!disable_legacy_audio || !disable_legacy_networking)
+		if (nextWake > 0.02 && (#if !disable_legacy_audio SoundChannel.__completePending () #else false #end || #if !disable_legacy_networking URLLoader.__loadPending () #else false #end )) {
+			
+			nextWake = (active || !pauseWhenDeactivated) ? 0.020 : 0.500;
+			
+		}
+		#end
+		
+		nextWake = __nextFrameDue (nextWake);
+		lime_stage_set_next_wake (__handle, nextWake);
+		return nextWake;
+		#end
+		
+	}
+	
+	
+	
+	
+	// Getters & Setters
+	
+	
+	
+	
+	private function get_align ():StageAlign {
+		
+		var i:Int = lime_stage_get_align (__handle);
+		return Type.createEnumIndex (StageAlign, i);
+		
+	}
+	
+	
+	private function set_align (value:StageAlign):StageAlign {
+		
+		lime_stage_set_align (__handle, Type.enumIndex (value));
+		return value;
+		
+	}
+	
+	
+	private function get_color ():Int {
+		
+		return opaqueBackground;
+		
+	}
+	
+	
+	private function set_color (value:Int):Int {
+		
+		return opaqueBackground = value;
+		
+	}
+	
+	
+	private function get_displayState ():StageDisplayState {
+		
+		var i:Int = lime_stage_get_display_state (__handle);
+		return Type.createEnumIndex (StageDisplayState, i);
+		
+	}
+	
+	
+	private function set_displayState (value:StageDisplayState):StageDisplayState {
+		
+		lime_stage_set_display_state (__handle, Type.enumIndex (value));
+		return value;
+		
+	}
+	
+	
+	private function get_dpiScale ():Float {
+		
+		return lime_stage_get_dpi_scale (__handle);
+		
+	}
+	
+	
+	private function get_focus ():InteractiveObject {
+		
+		var id = lime_stage_get_focus_id (__handle);
+		var object = __findByID (id);
+		return cast object;
+		
+	}
+	
+	
+	private function set_focus (value:InteractiveObject):InteractiveObject {
+		
+		if (value == null) {
+			
+			lime_stage_set_focus (__handle, null, 0);
+			
+		} else {
+			
+			lime_stage_set_focus (__handle, value.__handle, 0);
+			
+		}
+		
+		return value;
+		
+	}
+	
+	
+	private function set_frameRate (value:Float):Float {
+		
+		frameRate = value;
+		__framePeriod = (frameRate <= 0 ? frameRate : 1.0 / frameRate);
+		__nextRender = __lastRender + __framePeriod;
+		return value;
+		
+	}
+	
+	
+	private function get_isOpenGL ():Bool {
+		
+		return lime_stage_is_opengl (__handle);
+		
+	}
+	
+	
+	private function get_quality ():StageQuality {
+		
+		var i:Int = lime_stage_get_quality (__handle);
+		return Type.createEnumIndex (StageQuality, i);
+		
+	}
+	
+	
+	private function set_quality (value:StageQuality):StageQuality {
+		
+		lime_stage_set_quality (__handle, Type.enumIndex (value));
+		return value;
+		
+	}
+	
+	
+	private function get_scaleMode ():StageScaleMode {
+		
+		var i:Int = lime_stage_get_scale_mode (__handle);
+		return Type.createEnumIndex (StageScaleMode, i);
+		
+	}
+	
+	
+	private function set_scaleMode (value:StageScaleMode):StageScaleMode {
+		
+		lime_stage_set_scale_mode (__handle, Type.enumIndex (value));
+		return value;
+		
+	}
+	
+	
+	private function get_softKeyboardRect ():Rectangle {
+		
+		if (__softKeyboardRect == null) {
+			
+			__softKeyboardRect = new Rectangle ();
+			
+		}
+		
+		#if (ios || android)
+		var height = #if android #if lime_legacy lime_get_softkeyboardheight (); #else 0; #end #else lime_stage_get_keyboard_height (__handle); #end
+		
+		if (height > 0) {
+			
+			__softKeyboardRect.x = 0;
+			__softKeyboardRect.y = stageHeight - height;
+			__softKeyboardRect.width = stageWidth;
+			__softKeyboardRect.height = height;
+			
+		} else {
+			
+			__softKeyboardRect.x = 0;
+			__softKeyboardRect.y = 0;
+			__softKeyboardRect.width = 0;
+			__softKeyboardRect.height = 0;
+			
+		}
+		#end
+		
+		return __softKeyboardRect;
+		
+	}
+	
+	
+	private override function get_stage ():Stage {
+		
+		return this;
+		
+	}
+	
+	
+	private function get_stageFocusRect ():Bool { return lime_stage_get_focus_rect (__handle); }
+	private function set_stageFocusRect (value:Bool):Bool {
+		
+		lime_stage_set_focus_rect (__handle, value);
+		return value;
+		
+	}
+
+
+	private function get_autos3d ():Bool { return lime_stage_get_autos3d (__handle); }
+	private function set_autos3d (value:Bool):Bool {
+		
+		lime_stage_set_autos3d (__handle, value);
+		return value;
+		
+	}
+	
+	
+	private function get_stageHeight ():Int {
+		
+		return Std.int (cast (lime_stage_get_stage_height (__handle), Float));
+		
+	}
+	
+	
+	private function get_stageWidth ():Int {
+		
+		return Std.int (cast (lime_stage_get_stage_width (__handle), Float));
+		
+	}
+	
+	
+	
+	
+	// Native Methods
+	
+	
+	
+	
+	private static var lime_set_stage_handler = Lib.load ("lime-legacy", "lime_legacy_set_stage_handler", 4);
+	private static var lime_render_stage = Lib.load ("lime-legacy", "lime_legacy_render_stage", 1);
+	private static var lime_stage_get_autos3d = Lib.load ("lime-legacy", "lime_legacy_stage_get_autos3d", 1);
+	private static var lime_stage_set_autos3d = Lib.load ("lime-legacy", "lime_legacy_stage_set_autos3d", 2);
+	private static var lime_stage_get_focus_id = Lib.load ("lime-legacy", "lime_legacy_stage_get_focus_id", 1);
+	private static var lime_stage_set_focus = Lib.load ("lime-legacy", "lime_legacy_stage_set_focus", 3);
+	private static var lime_stage_get_focus_rect = Lib.load ("lime-legacy", "lime_legacy_stage_get_focus_rect", 1);
+	private static var lime_stage_set_focus_rect = Lib.load ("lime-legacy", "lime_legacy_stage_set_focus_rect", 2);
+	private static var lime_stage_is_opengl = Lib.load ("lime-legacy", "lime_legacy_stage_is_opengl", 1);
+	#if ios
+	private static var lime_stage_get_keyboard_height = Lib.load ("lime-legacy", "lime_legacy_stage_get_keyboard_height", 1);
+	#end
+	private static var lime_stage_get_stage_width = Lib.load ("lime-legacy", "lime_legacy_stage_get_stage_width", 1);
+	private static var lime_stage_get_stage_height = Lib.load ("lime-legacy", "lime_legacy_stage_get_stage_height", 1);
+	private static var lime_stage_get_dpi_scale = Lib.load ("lime-legacy", "lime_legacy_stage_get_dpi_scale", 1);
+	private static var lime_stage_get_scale_mode = Lib.load ("lime-legacy", "lime_legacy_stage_get_scale_mode", 1);
+	private static var lime_stage_set_scale_mode = Lib.load ("lime-legacy", "lime_legacy_stage_set_scale_mode", 2);
+	private static var lime_stage_get_align = Lib.load ("lime-legacy", "lime_legacy_stage_get_align", 1);
+	private static var lime_stage_set_align = Lib.load ("lime-legacy", "lime_legacy_stage_set_align", 2);
+	private static var lime_stage_get_quality = Lib.load ("lime-legacy", "lime_legacy_stage_get_quality", 1);
+	private static var lime_stage_set_quality = Lib.load ("lime-legacy", "lime_legacy_stage_set_quality", 2);
+	private static var lime_stage_get_display_state = Lib.load ("lime-legacy", "lime_legacy_stage_get_display_state", 1);
+	private static var lime_stage_set_display_state = Lib.load ("lime-legacy", "lime_legacy_stage_set_display_state", 2);
+	private static var lime_stage_set_next_wake = Lib.load ("lime-legacy", "lime_legacy_stage_set_next_wake", 2);
+	private static var lime_stage_request_render = Lib.load ("lime-legacy", "lime_legacy_stage_request_render", 0);
+	private static var lime_stage_resize_window = Lib.load ("lime-legacy", "lime_legacy_stage_resize_window", 3);
+	private static var lime_stage_set_resolution = Lib.load ("lime-legacy", "lime_legacy_stage_set_resolution", 3);
+	private static var lime_stage_set_screenmode = Lib.load ("lime-legacy", "lime_legacy_stage_set_screenmode", 5);
+	private static var lime_stage_set_fullscreen = Lib.load ("lime-legacy", "lime_legacy_stage_set_fullscreen", 2);
+	private static var lime_stage_show_cursor = Lib.load ("lime-legacy", "lime_legacy_stage_show_cursor", 2);
+	private static var lime_stage_set_fixed_orientation = Lib.load ("lime-legacy", "lime_legacy_stage_set_fixed_orientation", 1);
+	private static var lime_get_notch_height_stage = Lib.load ("lime-legacy", "lime_legacy_get_notch_height_stage", 1);
+	private static var lime_stage_get_orientation = Lib.load ("lime-legacy", "lime_legacy_stage_get_orientation", 0);
+	private static var lime_stage_get_normal_orientation = Lib.load ("lime-legacy", "lime_legacy_stage_get_normal_orientation", 0);
+	
+	#if (android && lime_legacy)
+	private static var lime_get_softkeyboardheight = JNI.createStaticMethod ("org.haxe.lime.GameActivity", "getSoftKeyboardHeight", "()F");
+	#end
+	
+	
 }
 
-class TouchInfo 
-{
-   public var touchOverObjects:Array<InteractiveObject>;
 
-   public function new() 
-   {
-      touchOverObjects = [];
-   }
+class TouchInfo {
+	
+	
+	public var touchOverObjects:Array<InteractiveObject>;
+	
+	
+	public function new () {
+		
+		touchOverObjects = [];
+		
+	}
+	
+	
 }
 
-#else
-typedef Stage = flash.display.Stage;
+
 #end
