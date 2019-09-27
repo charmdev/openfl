@@ -161,7 +161,7 @@ class Stage extends DisplayObjectContainer {
 	
 	public function getNotchHeight():Int
 	{
-		var notchHeight:Int = lime_get_notch_height_stage(nmeHandle);
+		var notchHeight:Int = lime_get_notch_height_stage(__handle);
 		return notchHeight;
 	}
 	
